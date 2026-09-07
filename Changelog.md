@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.1.0] - 2026-09-07
+### "Copy to Actor Sidebar" Enhancements
+* **Root Directory Placement**: Newly copied actors are now always created at the top level (root) of the Actor Sidebar (`folder: null`) instead of inheriting the template's subfolder.
+* **Synchronized Token Linking**: Placed tokens on the active scene are automatically linked to the newly created world actor (`actorLink: true`, sharing the exact same UUID) so HP and stat changes sync seamlessly.
+* **Auto-Close Sheet**: The open character sheet closes automatically after clicking "Copy to Actor Sidebar" for a cleaner workflow.
+* **Link Actor Data by Default**: Prototype token settings for the newly generated world actor have "Link Actor Data" enabled out-of-the-box.
+
+### Manifest & System Fixes
+* **Compendium Folders**: Added `packFolders` definition in `module.json` to organize packs under the `Lidarion - Kompendiums` folder.
+* **Manifest Validation**: Fixed JSON syntax formatting in `module.json` ensuring proper detection by Foundry VTT.
+
+---
+
 ## [2.0.0] - 2026-09-02
 
 ### New Name Tables
