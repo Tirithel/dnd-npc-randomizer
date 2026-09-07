@@ -361,10 +361,8 @@ export async function copyActorToSidebar(actor, app) {
         foundry.utils.setProperty(actorData, "prototypeToken.flags.dnd-npc-randomizer.nameRollTable", "");
     }
 
-    // Keep folder if valid world folder, otherwise place at root
-    if (actorData.folder && !game.folders.has(actorData.folder)) {
-        actorData.folder = null;
-    }
+    // Always place the newly copied actor at the root level of the sidebar (no folder)
+    actorData.folder = null;
 
     try {
         const created = await Actor.create(actorData);

@@ -4,15 +4,15 @@
   "description": "Generates random NPC names via RollTables and sets dynamic Token portraits for D&D 5e.",
   "url": "https://github.com/LidarionDnD/dnd-npc-randomizer",
   "manifest": "https://github.com/LidarionDnD/dnd-npc-randomizer/releases/latest/download/module.json",
-  "download": "https://github.com/LidarionDnD/dnd-npc-randomizer/releases/download/v2.0.0/dnd-npc-randomizer.zip",
-  "version": "2.0.0",
+  "download": "https://github.com/LidarionDnD/dnd-npc-randomizer/releases/download/v2.1.0/dnd-npc-randomizer.zip",
+  "version": "2.1.0",
   "compatibility": {
     "minimum": "13",
-    "verified": "14.366"
+    "verified": "14.367"
   },
   "authors": [
     {
-      "name": "Dominik"
+      "name": "LidarionModules"
     }
   ],
   "relationships": {
@@ -29,10 +29,20 @@
   "packs": [
     {
       "name": "npc-compendium",
-      "label": "Lidarion - Random NPCs",
+      "label": "Random NPCs",
       "path": "packs/npc-compendium",
       "type": "Actor",
       "system": "dnd5e"
+    }
+  ],
+  "packFolders": [
+    {
+      "name": "Lidarion - Kompendiums",
+      "sorting": "a",
+      "color": "#456c78",
+      "packs": [
+        "npc-compendium"
+      ]
     }
   ]
 }
