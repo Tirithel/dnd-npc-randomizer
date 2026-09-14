@@ -11,7 +11,8 @@
  * Rather than shipping placeholder art, the module generates a default set with
  * the same OpenAI pipeline used for individual NPCs, and repoints broken
  * references at it. Repair never leaves a token in an erroring state: if no
- * defaults have been generated yet, the wildcard is cleared instead.
+ * defaults have been generated yet, the reference falls back to Foundry's own
+ * mystery-man icon, which is always present.
  */
 
 import { OpenAIImageGenerator } from "./openai-image.js";
@@ -23,6 +24,16 @@ export const DEFAULT_ANCESTRIES = ["human", "dwarf", "elf", "tiefling"];
 
 /** Genders generated per ancestry. */
 export const DEFAULT_GENDERS = ["male", "female"];
+
+/**
+ * Foundry's own placeholder, used when no generated default is available.
+ * An explicit, always-present path is safer than an empty source: it renders
+ * predictably and cannot be mistaken for an unresolvable wildcard.
+ * @returns {string} Path to the core mystery-man icon.
+ */
+function placeholderImage() {
+    return globalThis.CONST?.DEFAULT_TOKEN ?? "icons/svg/mystery-man.svg";
+}
 
 /**
  * Resolves the FilePicker implementation across Foundry versions.
@@ -243,7 +254,7 @@ export class DefaultTokens {
         proto.randomImg = replacement.randomImg;
 
         if (actorData.img && !(await this.isResolvable(actorData.img))) {
-            actorData.img = replacement.randomImg ? "" : replacement.src;
+            actorData.img = replacement.randomImg ? placeholderImage() : replacement.src;
         }
 
         return true;
@@ -267,7 +278,7 @@ export class DefaultTokens {
         const generic = `${this.directory()}/Random_npc_*`;
         if (await this.isResolvable(generic, true)) return { src: generic, randomImg: true };
 
-        return { src: "", randomImg: false };
+        return { src: placeholderImage(), randomImg: false };
     }
 
     /**
@@ -308,7 +319,7 @@ export class DefaultTokens {
                 if (!replacement.randomImg) clearedOnly++;
             }
 
-            if (!portraitOk) update.img = "";
+            if (!portraitOk) update.img = placeholderImage();
 
             updates.push(update);
         }
@@ -324,7 +335,8 @@ export class DefaultTokens {
             } else if (clearedOnly) {
                 ui.notifications.warn(
                     `NPC Randomizer: repaired ${updates.length} actor(s). ${clearedOnly} had no default art to point at, `
-                    + "so their wildcard was cleared. Run \"Generate Default Tokens\" and repair again to give them art.");
+                    + "so they now use Foundry's mystery-man placeholder. Run \"Generate Default Tokens\" and repair "
+                    + "again to give them real art.");
             } else {
                 ui.notifications.info(`NPC Randomizer: repaired token art on ${updates.length} actor(s).`);
             }

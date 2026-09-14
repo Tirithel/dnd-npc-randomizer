@@ -1,3 +1,7 @@
+# 2.2.2
+
+* Repair now falls back to Foundry's own `icons/svg/mystery-man.svg` (via `CONST.DEFAULT_TOKEN`) instead of clearing the image to an empty string. An always-present path renders predictably and cannot be mistaken for an unresolvable wildcard. Applies to prototype tokens and to portraits, on both compendium import and the world sweep.
+
 # 2.2.1
 
 * **Fixed "Error retrieving wildcard tokens"**. The bundled compendium ships prototype tokens pointing at the original author's install (`assets/dnd-npc-randomizer/...*` resolved from the data root, plus `worlds/lidarion/...` and `tokenizer/_cache/...`). None exist in a fresh install, so Foundry failed the wildcard lookup.

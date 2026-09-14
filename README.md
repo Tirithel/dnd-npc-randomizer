@@ -87,7 +87,7 @@ The module can generate a portrait for an NPC from its **ancestry** and **biogra
 
 The bundled compendium ships prototype tokens pointing at the original author's install — a wildcard under `assets/dnd-npc-randomizer/` resolved from the **Foundry data root** (not from inside this module), plus `worlds/lidarion/...` and `tokenizer/_cache/...` images. None of those exist in a fresh install, so Foundry fails the wildcard lookup and raises that error.
 
-Imported NPCs are now repaired automatically as they are created, and **Repair Token Images** fixes worlds that already contain them. Where no default art has been generated yet, the wildcard is *cleared* rather than repointed — an unresolvable wildcard is precisely what raises the error, whereas an empty source falls back to Foundry's own placeholder and is harmless.
+Imported NPCs are now repaired automatically as they are created, and **Repair Token Images** fixes worlds that already contain them. Where no default art has been generated yet, the reference is repointed at Foundry's own `icons/svg/mystery-man.svg` rather than left as an unresolvable wildcard — that wildcard is precisely what raises the error, and a path that always exists renders predictably in its place.
 
 ### When art is generated
 
