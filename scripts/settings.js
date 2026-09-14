@@ -1,3 +1,5 @@
+import { DefaultTokens } from "./default-tokens.js";
+
 /**
  * A dummy FormApplication that intercepts the rendering process to execute
  * the default table generation logic, then immediately closes itself.
@@ -195,6 +197,13 @@ export class NPCRandomizerSettings {
             if (!exists) {
                 const actorData = doc.toObject();
                 actorData.folder = targetFolderId;
+
+                // The bundled compendium points at the original author's own
+                // image paths, which do not exist in a fresh install. Left
+                // alone, the wildcard ones raise "Error retrieving wildcard
+                // tokens" the moment the NPC is used.
+                await DefaultTokens.repairActorData(actorData);
+
                 await Actor.create(actorData);
                 console.log(`dnd-npc-randomizer | Imported Actor: ${doc.name}`);
             }

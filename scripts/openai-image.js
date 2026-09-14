@@ -157,39 +157,114 @@ export class OpenAIImageGenerator {
      * @returns {Promise<Uint8Array>} The raw PNG bytes.
      * @throws {Error} When the key is missing or the API reports a failure.
      */
-    static async requestImage({ prompt, apiKey, model, size, quality } = {}) {
+    /**
+     * Coerces a size to one the given model actually accepts. The two model
+     * families support different dimensions, and sending the wrong pair is a
+     * hard 400 from the API.
+     *
+     * @param {string} model - Model id.
+     * @param {string} size - Requested size.
+     * @returns {string} A size valid for that model.
+     */
+    static normaliseSize(model, size) {
+        const isDallE = String(model || "").startsWith("dall-e");
+        const GPT_IMAGE = ["1024x1024", "1024x1536", "1536x1024"];
+        const DALL_E_3 = ["1024x1024", "1024x1792", "1792x1024"];
+
+        const portrait = isDallE ? "1024x1792" : "1024x1536";
+        const landscape = isDallE ? "1792x1024" : "1536x1024";
+
+        const value = String(size || "").toLowerCase().trim();
+        if (value === "portrait") return portrait;
+        if (value === "landscape") return landscape;
+        if (value === "square") return "1024x1024";
+
+        const allowed = isDallE ? DALL_E_3 : GPT_IMAGE;
+        if (allowed.includes(value)) return value;
+
+        // Preserve the intended aspect ratio where an explicit WxH was given.
+        const [w, h] = value.split("x").map(Number);
+        if (w && h && h > w) return portrait;
+        if (w && h && w > h) return landscape;
+        return "1024x1024";
+    }
+
+    /**
+     * Coerces quality to a value the given model accepts.
+     * @param {string} model - Model id.
+     * @param {string} quality - Requested quality.
+     * @returns {string|null} A valid quality, or null to omit the field.
+     */
+    static normaliseQuality(model, quality) {
+        if (!quality || quality === "auto") return null;
+        if (model.startsWith("dall-e")) {
+            // dall-e-3 only knows standard/hd.
+            return quality === "high" ? "hd" : "standard";
+        }
+        return ["low", "medium", "high"].includes(quality) ? quality : null;
+    }
+
+    static async requestImage({ prompt, apiKey, model, size, quality, _retried } = {}) {
         const key = this.getApiKey(apiKey);
         if (!key) throw new Error("No OpenAI API key configured. Set one in the module settings.");
 
         const useModel = model || game.settings.get(MODULE_ID, "openaiImageModel");
+        const requestedSize = size || game.settings.get(MODULE_ID, "openaiImageSize");
+        const requestedQuality = quality || game.settings.get(MODULE_ID, "openaiImageQuality");
+
         const body = {
             model: useModel,
             prompt: prompt,
             n: 1,
-            size: size || game.settings.get(MODULE_ID, "openaiImageSize")
+            size: this.normaliseSize(useModel, requestedSize)
         };
 
-        const useQuality = quality || game.settings.get(MODULE_ID, "openaiImageQuality");
-        if (useQuality && useQuality !== "auto") body.quality = useQuality;
+        const finalQuality = this.normaliseQuality(useModel, requestedQuality);
+        if (finalQuality) body.quality = finalQuality;
 
         // gpt-image-1 always returns base64 and rejects response_format;
         // the dall-e models need to be asked for it explicitly.
         if (useModel.startsWith("dall-e")) body.response_format = "b64_json";
 
-        const response = await fetch(OPENAI_IMAGE_ENDPOINT, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${key}`
-            },
-            body: JSON.stringify(body)
-        });
+        let response;
+        try {
+            response = await fetch(OPENAI_IMAGE_ENDPOINT, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${key}`
+                },
+                body: JSON.stringify(body)
+            });
+        } catch (networkError) {
+            throw new Error(`Could not reach the OpenAI API: ${networkError.message}. `
+                + "If Foundry is served over HTTPS, check that nothing is blocking the request.");
+        }
 
         const payload = await response.json().catch(() => ({}));
 
         if (!response.ok) {
             const message = payload?.error?.message || `HTTP ${response.status}`;
-            throw new Error(`OpenAI image request failed: ${message}`);
+
+            // gpt-image-1 is gated behind OpenAI organisation verification. An
+            // unverified org gets a 403 here, which is by far the most common
+            // reason generation silently never produces anything, so fall back
+            // to dall-e-3 once rather than failing outright.
+            const needsVerification = /verif/i.test(message) || response.status === 403;
+            if (needsVerification && !useModel.startsWith("dall-e") && !_retried) {
+                console.warn(`${MODULE_ID} | ${useModel} rejected (${message}); retrying with dall-e-3.`);
+                ui.notifications?.warn(`NPC Randomizer: ${useModel} unavailable on this account, falling back to dall-e-3.`);
+                return this.requestImage({ prompt, apiKey, model: "dall-e-3", size: requestedSize, quality: requestedQuality, _retried: true });
+            }
+
+            if (response.status === 401) {
+                throw new Error("OpenAI rejected the API key (401). Check the key in the module settings.");
+            }
+            if (response.status === 429) {
+                throw new Error(`OpenAI rate limit or quota exceeded (429): ${message}`);
+            }
+
+            throw new Error(`OpenAI image request failed (${response.status}): ${message}`);
         }
 
         const entry = payload?.data?.[0];
@@ -336,5 +411,52 @@ export class OpenAIImageGenerator {
 
         console.log(`${MODULE_ID} | Stored generated image at ${path}`);
         return { path, prompt: finalPrompt };
+    }
+
+    /**
+     * Runs one end-to-end generation and reports precisely what happened.
+     *
+     * Exists because every failure mode here is otherwise invisible: a missing
+     * key, an unverified organisation, an exhausted quota and a blocked upload
+     * all look identical from the table, i.e. no image appears.
+     *
+     * @param {Object} [options] - Options.
+     * @param {string} [options.apiKey] - Key override.
+     * @param {boolean} [options.notify=true] - Surface notifications.
+     * @returns {Promise<{ok: boolean, stage: string, detail: string, path?: string}>} Result.
+     */
+    static async testConnection({ apiKey, notify = true } = {}) {
+        const report = (ok, stage, detail, path) => {
+            const line = `NPC Randomizer test: ${ok ? "OK" : "FAILED"} at ${stage} - ${detail}`;
+            console.log(`${MODULE_ID} | ${line}`);
+            if (notify) {
+                if (ok) ui.notifications.info(line);
+                else ui.notifications.error(line);
+            }
+            return { ok, stage, detail, path };
+        };
+
+        const key = this.getApiKey(apiKey);
+        if (!key) return report(false, "api key", "no key configured in module settings");
+        if (!key.startsWith("sk-")) {
+            return report(false, "api key", "key does not look like an OpenAI key (expected it to start with 'sk-')");
+        }
+
+        let bytes;
+        try {
+            bytes = await this.requestImage({
+                prompt: "A plain grey circle on a white background. Simple test image.",
+                apiKey: key
+            });
+        } catch (error) {
+            return report(false, "OpenAI request", error.message);
+        }
+
+        try {
+            const path = await this.saveImage(bytes, "connection-test");
+            return report(true, "upload", `image generated and stored at ${path}`, path);
+        } catch (error) {
+            return report(false, "upload", `OpenAI returned an image but Foundry could not store it: ${error.message}`);
+        }
     }
 }

@@ -75,9 +75,25 @@ The module can generate a portrait for an NPC from its **ancestry** and **biogra
 
 > **Why the key is per-browser.** Foundry replicates `world`-scoped settings to every connected client, so a key stored world-side would be readable by any player from the browser console. This setting is `client`-scoped, so the key never leaves the GM's browser — the trade-off is that each GM enters it once per browser, and it does not sync between machines.
 
+### First run
+
+1. **Test OpenAI Connection** — runs one throwaway generation and reports exactly which stage failed. Worth doing first: a missing key, an unverified organisation, an exhausted quota and a blocked upload all look identical otherwise, i.e. no image appears.
+2. **Generate Default Tokens** — generates one reusable default per ancestry and gender, then repairs any NPC with no valid art.
+3. **Repair Token Images** — sweeps the world for unresolvable token and portrait paths. Makes no OpenAI calls, so it is free to run any time.
+
+> **`gpt-image-1` requires OpenAI organisation verification.** Unverified accounts get a 403. The module detects this and retries once with `dall-e-3`, telling you it has done so.
+
+### Fixing "Error retrieving wildcard tokens"
+
+The bundled compendium ships prototype tokens pointing at the original author's install — a wildcard under `assets/dnd-npc-randomizer/` resolved from the **Foundry data root** (not from inside this module), plus `worlds/lidarion/...` and `tokenizer/_cache/...` images. None of those exist in a fresh install, so Foundry fails the wildcard lookup and raises that error.
+
+Imported NPCs are now repaired automatically as they are created, and **Repair Token Images** fixes worlds that already contain them. Where no default art has been generated yet, the wildcard is *cleared* rather than repointed — an unresolvable wildcard is precisely what raises the error, whereas an empty source falls back to Foundry's own placeholder and is harmless.
+
 ### When art is generated
 
 Art is generated on drop **only when the existing parallel-folder portrait lookup finds nothing**. Curated art therefore always wins, and no image call is billed for an NPC that already has a portrait.
+
+Name rolling and the portrait swap apply to **unlinked** tokens only, as before. Art generation applies to both — a linked actor promoted via "Copy to Actor Sidebar" still gets a portrait.
 
 You can also generate on demand: open any actor sheet and choose **Generate Token Art** from the header controls menu. This works for actors that were never dropped on a scene, and re-running it replaces the art.
 

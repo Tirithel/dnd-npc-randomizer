@@ -1,5 +1,11 @@
 import { NPCRandomizerSettings, GenerateTablesDummyApp, GenerateNPCsDummyApp } from "./settings.js";
 import { OpenAIImageGenerator } from "./openai-image.js";
+import {
+    DefaultTokens,
+    RepairTokensDummyApp,
+    GenerateDefaultTokensDummyApp,
+    TestOpenAIDummyApp
+} from "./default-tokens.js";
 
 /**
  * Initialize module.
@@ -23,6 +29,33 @@ Hooks.once("init", () => {
         label: "Import NPCs",
         hint: "Manually generation of Pre-Made NPCs.",
         type: GenerateNPCsDummyApp,
+        restricted: true
+    });
+
+    // One call that reports exactly which stage fails, because a missing key,
+    // an unverified organisation, an exhausted quota and a blocked upload are
+    // otherwise indistinguishable from the table: no image appears.
+    game.settings.registerMenu("dnd-npc-randomizer", "testOpenAIMenu", {
+        name: "Test OpenAI Connection",
+        label: "Run Test",
+        hint: "Generates one throwaway image and reports precisely what succeeded or failed.",
+        type: TestOpenAIDummyApp,
+        restricted: true
+    });
+
+    game.settings.registerMenu("dnd-npc-randomizer", "generateDefaultTokensMenu", {
+        name: "Generate Default Tokens",
+        label: "Generate Defaults",
+        hint: "Generates a reusable default token per ancestry and gender via OpenAI, then repairs NPCs that have no valid art. Billed image calls.",
+        type: GenerateDefaultTokensDummyApp,
+        restricted: true
+    });
+
+    game.settings.registerMenu("dnd-npc-randomizer", "repairTokensMenu", {
+        name: "Repair Token Images",
+        label: "Repair",
+        hint: "Finds NPCs whose token or portrait image cannot be resolved and repoints them, fixing \"Error retrieving wildcard tokens\". Makes no OpenAI calls.",
+        type: RepairTokensDummyApp,
         restricted: true
     });
 
@@ -72,16 +105,18 @@ Hooks.once("init", () => {
         default: "gpt-image-1"
     });
 
+    // The two model families accept different dimensions, so the value is
+    // coerced to something the chosen model allows before the request is sent.
     game.settings.register("dnd-npc-randomizer", "openaiImageSize", {
         name: "Image Size",
-        hint: "Square suits tokens best.",
+        hint: "Square suits tokens best. Adjusted automatically if the chosen model does not accept this exact size.",
         scope: "world",
         config: true,
         type: String,
         choices: {
-            "1024x1024": "1024 x 1024 (square)",
-            "1024x1536": "1024 x 1536 (portrait)",
-            "1536x1024": "1536 x 1024 (landscape)"
+            "1024x1024": "Square (1024 x 1024)",
+            "portrait": "Portrait",
+            "landscape": "Landscape"
         },
         default: "1024x1024"
     });
@@ -155,7 +190,11 @@ Hooks.once("ready", async () => {
             extractRace: OpenAIImageGenerator.extractRace.bind(OpenAIImageGenerator),
             extractDescription: OpenAIImageGenerator.extractDescription.bind(OpenAIImageGenerator),
             copyActorToSidebar: copyActorToSidebar,
-            OpenAIImageGenerator: OpenAIImageGenerator
+            testConnection: OpenAIImageGenerator.testConnection.bind(OpenAIImageGenerator),
+            generateDefaultTokens: DefaultTokens.generateDefaults.bind(DefaultTokens),
+            repairTokenImages: DefaultTokens.repairWorldActors.bind(DefaultTokens),
+            OpenAIImageGenerator: OpenAIImageGenerator,
+            DefaultTokens: DefaultTokens
         };
     }
 
@@ -165,6 +204,7 @@ Hooks.once("ready", async () => {
         if (!isInitialized) {
             await NPCRandomizerSettings.generateDefaultTables();
             await NPCRandomizerSettings.generateDefaultNPCs();
+            await DefaultTokens.repairWorldActors({ notify: false });
             await game.settings.set("dnd-npc-randomizer", "initialized", true);
         }
     }
@@ -414,8 +454,11 @@ Hooks.on("createToken", async (token, options, userId) => {
     // Only the user executing the creation should process the generation logic
     if (game.user.id !== userId) return;
 
-    // Feature is restricted to unlinked actors (prototypes)
-    if (token.actorLink) return;
+    // Name rolling and the portrait swap are deliberately limited to unlinked
+    // tokens. Art generation is not: a linked actor promoted via "Copy to Actor
+    // Sidebar" still deserves a portrait, and returning here meant dropping one
+    // produced nothing at all, with no indication why.
+    const isUnlinked = !token.actorLink;
 
     // 1. Fetch table flag from the token (copied from prototype)
     let tableId = token.getFlag("dnd-npc-randomizer", "nameRollTable");
@@ -430,7 +473,7 @@ Hooks.on("createToken", async (token, options, userId) => {
 
     // Feature A: Portrait Image Matching (Parallel "Portraits" folder, exact same filename)
     const currentImg = token.texture?.src || token._source?.texture?.src;
-    if (currentImg && currentImg.includes("/Tokens/")) {
+    if (isUnlinked && currentImg && currentImg.includes("/Tokens/")) {
         const expectedPortraitPath = currentImg.replace("/Tokens/", "/Portraits/");
 
         try {
@@ -445,7 +488,7 @@ Hooks.on("createToken", async (token, options, userId) => {
     }
 
     // Feature B: Random Name assignment
-    if (tableId) {
+    if (isUnlinked && tableId) {
         let table = game.tables.get(tableId);
 
         const configuredFolder = "NPC Name Randomizer";
@@ -639,7 +682,7 @@ Hooks.on("getHeaderControlsApplicationV2", (app, controls) => {
         icon: "fa-solid fa-wand-magic-sparkles",
         label: "Generate Token Art",
         action: "generateTokenArt",
-        visible: () => game.user.isGM && !!OpenAIImageGenerator.getApiKey(),
+        visible: () => game.user.isGM,
         onClick: () => applyGeneratedImage({ actor: actor, token: actor.token ?? null })
     });
 
