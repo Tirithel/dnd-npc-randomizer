@@ -1,3 +1,8 @@
+# 2.2.3
+
+* Repair now runs on **any** actor created in the world, via a `createActor` hook, not only those imported through this module's "Import NPCs" button. Dragging an NPC straight out of the compendium sidebar previously bypassed repair entirely and carried the dead image paths in verbatim.
+* Extracted the shared per-actor check into `computeRepair()`, used by both the world sweep and the new single-actor path.
+
 # 2.2.2
 
 * Repair now falls back to Foundry's own `icons/svg/mystery-man.svg` (via `CONST.DEFAULT_TOKEN`) instead of clearing the image to an empty string. An always-present path renders predictably and cannot be mistaken for an unresolvable wildcard. Applies to prototype tokens and to portraits, on both compendium import and the world sweep.

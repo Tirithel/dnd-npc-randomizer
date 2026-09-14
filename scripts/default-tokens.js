@@ -288,6 +288,65 @@ export class DefaultTokens {
      * @param {boolean} [options.notify=true] - Surface a summary notification.
      * @returns {Promise<number>} How many actors were repaired.
      */
+    /**
+     * Works out what an actor needs to stop referencing missing images.
+     *
+     * @param {Actor} actor - The actor to inspect.
+     * @returns {Promise<{update: Object, usedPlaceholder: boolean}|null>} The
+     *   update to apply, or null when nothing is broken.
+     */
+    static async computeRepair(actor) {
+        const proto = actor.prototypeToken;
+        const src = proto?.texture?.src || "";
+        const isWildcard = proto?.randomImg === true || src.includes("*");
+
+        const tokenOk = await this.isResolvable(src, isWildcard);
+        const portrait = actor.img || "";
+        const portraitOk = await this.isResolvable(portrait);
+        if (tokenOk && portraitOk) return null;
+
+        const update = { _id: actor.id };
+        let usedPlaceholder = false;
+
+        if (!tokenOk) {
+            const hints = this.hintsFromPath(src);
+            if (!hints.ancestry) {
+                // Fall back to the actor's own ancestry when the path says nothing.
+                hints.ancestry = OpenAIImageGenerator.extractRace(actor) || "";
+            }
+            const replacement = await this.replacementFor(hints);
+            update["prototypeToken.texture.src"] = replacement.src;
+            update["prototypeToken.randomImg"] = replacement.randomImg;
+            if (!replacement.randomImg) usedPlaceholder = true;
+        }
+
+        if (!portraitOk) update.img = placeholderImage();
+
+        return { update, usedPlaceholder };
+    }
+
+    /**
+     * Repairs a single existing actor.
+     *
+     * Used by the createActor hook so NPCs dragged straight out of the
+     * compendium sidebar are covered too, not just those imported through this
+     * module's own button.
+     *
+     * @param {Actor} actor - The actor to check.
+     * @returns {Promise<boolean>} True when the actor was changed.
+     */
+    static async repairActor(actor) {
+        if (!actor || actor.documentName !== "Actor") return false;
+
+        const result = await this.computeRepair(actor);
+        if (!result) return false;
+
+        const { _id, ...changes } = result.update;
+        await actor.update(changes);
+        console.log(`${MODULE_ID} | Repaired token art on "${actor.name}"`);
+        return true;
+    }
+
     static async repairWorldActors({ notify = true } = {}) {
         if (!game.user.isGM) return 0;
 
@@ -296,32 +355,10 @@ export class DefaultTokens {
         let clearedOnly = 0;
 
         for (const actor of game.actors) {
-            const proto = actor.prototypeToken;
-            const src = proto?.texture?.src || "";
-            const isWildcard = proto?.randomImg === true || src.includes("*");
-
-            const tokenOk = await this.isResolvable(src, isWildcard);
-            const portrait = actor.img || "";
-            const portraitOk = await this.isResolvable(portrait);
-            if (tokenOk && portraitOk) continue;
-
-            const update = { _id: actor.id };
-
-            if (!tokenOk) {
-                const hints = this.hintsFromPath(src);
-                if (!hints.ancestry) {
-                    // Fall back to the actor's own ancestry when the path says nothing.
-                    hints.ancestry = OpenAIImageGenerator.extractRace(actor) || "";
-                }
-                const replacement = await this.replacementFor(hints);
-                update["prototypeToken.texture.src"] = replacement.src;
-                update["prototypeToken.randomImg"] = replacement.randomImg;
-                if (!replacement.randomImg) clearedOnly++;
-            }
-
-            if (!portraitOk) update.img = placeholderImage();
-
-            updates.push(update);
+            const result = await this.computeRepair(actor);
+            if (!result) continue;
+            if (result.usedPlaceholder) clearedOnly++;
+            updates.push(result.update);
         }
 
         if (updates.length) {

@@ -446,6 +446,28 @@ export async function applyGeneratedImage({ token, actor, gender, applyTo, apiKe
 }
 
 /**
+ * Actor creation hook.
+ *
+ * Repairs missing token/portrait images on any actor entering the world,
+ * whichever route it took. The module's own import button repairs actor data
+ * before creation, but dragging an NPC straight out of the compendium sidebar
+ * bypasses that entirely and would carry the dead paths in verbatim.
+ *
+ * Runs after creation rather than in preCreateActor because the check is async
+ * (it browses the file system), and a preCreate hook cannot await.
+ */
+Hooks.on("createActor", async (actor, options, userId) => {
+    if (game.user.id !== userId) return;
+    if (!game.user.isGM) return;
+
+    try {
+        await DefaultTokens.repairActor(actor);
+    } catch (error) {
+        console.error("dnd-npc-randomizer | Could not repair actor images:", error);
+    }
+});
+
+/**
  * Token creation hook.
  * Processes random name generation and dynamic portrait assignment
  * when a new token is dragged onto the scene.
