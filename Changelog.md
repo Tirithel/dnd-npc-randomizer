@@ -1,3 +1,13 @@
+# 2.2.0
+
+* **AI Token Art**: generate NPC portraits with the OpenAI Images API from an actor's ancestry and biography.
+  * New client-scoped `OpenAI API Key` setting, so the key stays in the GM's browser instead of being replicated to every player.
+  * Generation on drop, off by default, and only when the parallel-folder portrait lookup finds nothing.
+  * New `Generate Token Art` header control for on-demand generation on any actor sheet.
+  * Generated PNGs are uploaded to `worlds/{world}/npc-randomizer` by default so they are captured by world backups.
+  * `Copy to Actor Sidebar` now carries the generated image and prompt onto the permanent actor.
+  * Public API on the module object: `applyGeneratedImage`, `generateImageForActor`, `buildPrompt`, `extractRace`, `extractDescription`.
+
 # Changelog
 
 ## [2.1.0] - 2026-09-07

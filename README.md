@@ -62,3 +62,68 @@ In the game settings, under the **Module Settings** tab, you will find two speci
 
 * This module is specifically designed for the **D&D 5e** system (although the main features could potentially work in other systems, provided they use the same standard token structures).
 * **Portrait Folder Structure**: For the automatic portrait feature to work, you must structure your image files into parallel folders named `Tokens` and `Portraits`. The filename must be identical in both folders. Example: A token image located at `.../Tokens/Goblin_01.png` requires a portrait image located at `.../Portraits/Goblin_01.png`.
+
+## AI Token Art (OpenAI)
+
+The module can generate a portrait for an NPC from its **ancestry** and **biography** using the OpenAI Images API.
+
+### Setup
+
+1. Create an API key at <https://platform.openai.com/api-keys>.
+2. Open **Configure Settings → DnD NPC Randomizer** and paste it into **OpenAI API Key**.
+3. Tick **Generate Token Art on Drop**.
+
+> **Why the key is per-browser.** Foundry replicates `world`-scoped settings to every connected client, so a key stored world-side would be readable by any player from the browser console. This setting is `client`-scoped, so the key never leaves the GM's browser — the trade-off is that each GM enters it once per browser, and it does not sync between machines.
+
+### When art is generated
+
+Art is generated on drop **only when the existing parallel-folder portrait lookup finds nothing**. Curated art therefore always wins, and no image call is billed for an NPC that already has a portrait.
+
+You can also generate on demand: open any actor sheet and choose **Generate Token Art** from the header controls menu. This works for actors that were never dropped on a scene, and re-running it replaces the art.
+
+### Where the files go
+
+Generated PNGs are uploaded into the Foundry data directory — not held as blob URLs — so the reference is an ordinary server path that survives restarts and loads for every connected player.
+
+The default location is `worlds/{world}/npc-randomizer`, where `{world}` expands to the current world id. Keeping art inside the world folder means it is captured by a world export/backup and travels with the world.
+
+This matters for **Copy to Actor Sidebar**: when a rolled scene token is promoted to a permanent world actor, the generated image path and prompt are copied onto the new actor, so the permanent NPC keeps its art rather than reverting to the prototype's portrait.
+
+### Settings
+
+| Setting | Scope | Default | Purpose |
+| --- | --- | --- | --- |
+| OpenAI API Key | client | *(blank)* | Your key. Blank disables generation. |
+| Generate Token Art on Drop | world | off | Generate when a randomized NPC is dropped. |
+| Image Model | world | `gpt-image-1` | `gpt-image-1` or `dall-e-3`. |
+| Image Size | world | `1024x1024` | Square suits tokens best. |
+| Image Quality | world | `medium` | Higher costs more per image. |
+| Art Direction | world | *(blank)* | Appended to every prompt; blank uses built-in token framing. |
+| Image Storage Path | world | `worlds/{world}/npc-randomizer` | Upload target, relative to the data directory. |
+| Apply Generated Art To | world | both | Map token, sheet portrait, or both. |
+
+### Programmatic use
+
+The module exposes an API on the module object, so art can be generated from a macro or script:
+
+```js
+const api = game.modules.get("dnd-npc-randomizer").api;
+
+// Generate and apply in one step, honouring the configured settings.
+await api.applyGeneratedImage({ actor: game.actors.getName("Gate Guard") });
+
+// Or generate only, and handle the file yourself. Returns { path, prompt }.
+const { path, prompt } = await api.generateImageForActor({
+    actor: game.actors.getName("Gate Guard"),
+    apiKey: "sk-...",          // optional: overrides the stored key
+    race: "Tiefling",           // optional: overrides what the actor says
+    description: "Scarred veteran with a brass eye",
+    style: "grim oil painting, muted palette",
+    size: "1024x1024"
+});
+
+// Inspect the prompt without spending anything.
+api.buildPrompt({ race: "Dwarf", gender: "female", description: "Ash-streaked smith" });
+```
+
+> **Cost.** Every generation is a billed OpenAI image call. Generation is off by default and only ever runs for the GM.

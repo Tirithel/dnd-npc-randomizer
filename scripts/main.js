@@ -1,4 +1,5 @@
 import { NPCRandomizerSettings, GenerateTablesDummyApp, GenerateNPCsDummyApp } from "./settings.js";
+import { OpenAIImageGenerator } from "./openai-image.js";
 
 /**
  * Initialize module.
@@ -33,6 +34,106 @@ Hooks.once("init", () => {
         type: Boolean,
         default: false
     });
+
+    // --- OpenAI token art -------------------------------------------------
+
+    // Client scope is deliberate. Foundry replicates world-scoped settings to
+    // every connected client, so a key stored world-side would be readable by
+    // any player from the console. Client scope keeps it in this browser only,
+    // which does mean each GM enters their own key per browser.
+    game.settings.register("dnd-npc-randomizer", "openaiApiKey", {
+        name: "OpenAI API Key",
+        hint: "Stored only in this browser, never sent to other players. Leave blank to disable image generation.",
+        scope: "client",
+        config: true,
+        type: String,
+        default: ""
+    });
+
+    game.settings.register("dnd-npc-randomizer", "openaiImageEnabled", {
+        name: "Generate Token Art on Drop",
+        hint: "When a randomized NPC is dropped on a scene, generate a portrait from its ancestry and description. Each token costs an OpenAI image call, so this is off by default.",
+        scope: "world",
+        config: true,
+        type: Boolean,
+        default: false
+    });
+
+    game.settings.register("dnd-npc-randomizer", "openaiImageModel", {
+        name: "Image Model",
+        hint: "OpenAI model used for generation.",
+        scope: "world",
+        config: true,
+        type: String,
+        choices: {
+            "gpt-image-1": "gpt-image-1",
+            "dall-e-3": "dall-e-3"
+        },
+        default: "gpt-image-1"
+    });
+
+    game.settings.register("dnd-npc-randomizer", "openaiImageSize", {
+        name: "Image Size",
+        hint: "Square suits tokens best.",
+        scope: "world",
+        config: true,
+        type: String,
+        choices: {
+            "1024x1024": "1024 x 1024 (square)",
+            "1024x1536": "1024 x 1536 (portrait)",
+            "1536x1024": "1536 x 1024 (landscape)"
+        },
+        default: "1024x1024"
+    });
+
+    game.settings.register("dnd-npc-randomizer", "openaiImageQuality", {
+        name: "Image Quality",
+        hint: "Higher quality costs more per image.",
+        scope: "world",
+        config: true,
+        type: String,
+        choices: {
+            "auto": "Auto",
+            "low": "Low",
+            "medium": "Medium",
+            "high": "High"
+        },
+        default: "medium"
+    });
+
+    game.settings.register("dnd-npc-randomizer", "openaiImageStyle", {
+        name: "Art Direction",
+        hint: "Appended to every prompt. Leave blank to use the built-in token-framing style.",
+        scope: "world",
+        config: true,
+        type: String,
+        default: ""
+    });
+
+    // Under worlds/<id>/ so generated art is captured by a world export and
+    // keeps working when a dropped token is promoted to a permanent actor.
+    game.settings.register("dnd-npc-randomizer", "openaiImagePath", {
+        name: "Image Storage Path",
+        hint: "Where generated art is uploaded, relative to the Foundry data directory. {world} expands to the current world id.",
+        scope: "world",
+        config: true,
+        type: String,
+        default: "worlds/{world}/npc-randomizer"
+    });
+
+    game.settings.register("dnd-npc-randomizer", "openaiImageApplyTo", {
+        name: "Apply Generated Art To",
+        hint: "Whether new art replaces the map token, the character sheet portrait, or both.",
+        scope: "world",
+        config: true,
+        type: String,
+        choices: {
+            "both": "Token and portrait",
+            "token": "Map token only",
+            "portrait": "Character sheet portrait only"
+        },
+        default: "both"
+    });
 });
 
 /**
@@ -41,6 +142,23 @@ Hooks.once("init", () => {
  * If not, it executes the generation once and marks the world as initialized.
  */
 Hooks.once("ready", async () => {
+    // Public API, so art can be generated from macros or scripts:
+    //   const api = game.modules.get("dnd-npc-randomizer").api;
+    //   await api.generateImageForActor({ actor, apiKey: "sk-..." });
+    //   await api.applyGeneratedImage({ actor });
+    const module = game.modules.get("dnd-npc-randomizer");
+    if (module) {
+        module.api = {
+            generateImageForActor: OpenAIImageGenerator.generateImageForActor.bind(OpenAIImageGenerator),
+            applyGeneratedImage: applyGeneratedImage,
+            buildPrompt: OpenAIImageGenerator.buildPrompt.bind(OpenAIImageGenerator),
+            extractRace: OpenAIImageGenerator.extractRace.bind(OpenAIImageGenerator),
+            extractDescription: OpenAIImageGenerator.extractDescription.bind(OpenAIImageGenerator),
+            copyActorToSidebar: copyActorToSidebar,
+            OpenAIImageGenerator: OpenAIImageGenerator
+        };
+    }
+
     // Erstelle die Standard-Tabellen und importiere NPCs nur einmalig bei der ersten Aktivierung/Initialisierung
     if (game.user.isGM) {
         const isInitialized = game.settings.get("dnd-npc-randomizer", "initialized");
@@ -216,8 +334,80 @@ Hooks.on("preUpdateToken", (token, changes, options, userId) => {
 });
 
 /**
+ * Generates token art via OpenAI and writes it onto a token and/or its actor.
+ *
+ * The uploaded file lives in the Foundry data directory, so the reference is a
+ * normal server path: it survives a restart, loads for every connected client,
+ * and remains valid when the scene token is later promoted into a permanent
+ * world actor via "Copy to Actor Sidebar".
+ *
+ * @param {Object} options - Options.
+ * @param {TokenDocument} [options.token] - Placed token to update.
+ * @param {Actor} [options.actor] - Actor to read race/description from.
+ * @param {string} [options.gender] - Gender hint for the prompt.
+ * @param {string} [options.applyTo] - "token", "portrait" or "both".
+ * @param {string} [options.apiKey] - API key override.
+ * @param {boolean} [options.notify=true] - Whether to surface UI notifications.
+ * @returns {Promise<string|null>} The stored image path, or null on failure.
+ */
+export async function applyGeneratedImage({ token, actor, gender, applyTo, apiKey, notify = true } = {}) {
+    const targetActor = actor ?? token?.actor;
+    if (!targetActor) return null;
+
+    const key = OpenAIImageGenerator.getApiKey(apiKey);
+    if (!key) {
+        if (notify) ui.notifications.warn("NPC Randomizer: no OpenAI API key configured.");
+        return null;
+    }
+
+    const name = token?.name || targetActor.name || "NPC";
+    let info;
+
+    if (notify) ui.notifications.info(`NPC Randomizer: generating art for "${name}"...`);
+
+    try {
+        info = await OpenAIImageGenerator.generateImageForActor({
+            actor: targetActor,
+            name: name,
+            gender: gender,
+            apiKey: key
+        });
+    } catch (error) {
+        console.error("dnd-npc-randomizer | Image generation failed:", error);
+        if (notify) ui.notifications.error(`NPC Randomizer: ${error.message}`);
+        return null;
+    }
+
+    const mode = applyTo || game.settings.get("dnd-npc-randomizer", "openaiImageApplyTo");
+    const wantsToken = mode === "both" || mode === "token";
+    const wantsPortrait = mode === "both" || mode === "portrait";
+
+    // Recorded on the document so the path survives promotion to a world actor
+    // and so a regenerated NPC can be told apart from hand-picked art.
+    const flagUpdates = {
+        "flags.dnd-npc-randomizer.generatedImage": info.path,
+        "flags.dnd-npc-randomizer.generatedPrompt": info.prompt
+    };
+
+    if (token) {
+        const updates = { ...flagUpdates };
+        if (wantsToken) updates["texture.src"] = info.path;
+        if (wantsPortrait) updates["delta.img"] = info.path;
+        await token.update(updates);
+    } else {
+        const updates = { ...flagUpdates };
+        if (wantsPortrait) updates.img = info.path;
+        if (wantsToken) updates["prototypeToken.texture.src"] = info.path;
+        await targetActor.update(updates);
+    }
+
+    if (notify) ui.notifications.info(`NPC Randomizer: art generated for "${name}".`);
+    return info.path;
+}
+
+/**
  * Token creation hook.
- * Processes random name generation and dynamic portrait assignment 
+ * Processes random name generation and dynamic portrait assignment
  * when a new token is dragged onto the scene.
  */
 Hooks.on("createToken", async (token, options, userId) => {
@@ -285,9 +475,6 @@ Hooks.on("createToken", async (token, options, userId) => {
         }
     }
 
-    // Abort if nothing to update
-    if (!newName && !newImg) return;
-
     // Prepare a single comprehensive database update object
     const updates = {};
 
@@ -298,7 +485,7 @@ Hooks.on("createToken", async (token, options, userId) => {
 
     if (newImg) {
         updates["delta.img"] = newImg;   // Updates the Character Sheet Portrait
-        // Explicitly force the token image to remain its current image to prevent 
+        // Explicitly force the token image to remain its current image to prevent
         // the game system (e.g. D&D 5e) from auto-syncing the map token to the new portrait!
         updates["texture.src"] = currentImg;
     }
@@ -310,6 +497,20 @@ Hooks.on("createToken", async (token, options, userId) => {
         if (newName) {
             ui.notifications.info(`NPC Randomizer: Token renamed to "${newName}"`);
         }
+    }
+
+    // Feature C: OpenAI-generated art, only when the parallel-folder lookup
+    // above found nothing. Curated art therefore always wins, and no image
+    // call is billed for an NPC that already has a portrait.
+    const aiEnabled = game.settings.get("dnd-npc-randomizer", "openaiImageEnabled");
+    if (aiEnabled && !newImg && game.user.isGM) {
+        // The name was just rolled, so the prompt and filename can use it, and
+        // the table label ("Human - Female") is the only gender hint available.
+        const genderHint = OpenAIImageGenerator.extractGender(
+            typeof tableId === "string" ? tableId : game.tables.get(tableId)?.name
+        );
+
+        await applyGeneratedImage({ token, gender: genderHint });
     }
 });
 
@@ -359,6 +560,23 @@ export async function copyActorToSidebar(actor, app) {
         actorData.prototypeToken.randomImg = false;
         // Clear nameRollTable so dragging this specific actor doesn't overwrite its name
         foundry.utils.setProperty(actorData, "prototypeToken.flags.dnd-npc-randomizer.nameRollTable", "");
+
+        // Carry generated art across explicitly. The uploaded file already lives
+        // in the data directory, so the permanent actor just keeps pointing at
+        // it; without this the sheet portrait can fall back to the base actor's
+        // image and the generated PNG is orphaned on disk.
+        const generated = actor.token?.getFlag?.("dnd-npc-randomizer", "generatedImage")
+            ?? foundry.utils.getProperty(actor, "token.flags.dnd-npc-randomizer.generatedImage");
+
+        if (generated) {
+            foundry.utils.setProperty(actorData, "flags.dnd-npc-randomizer.generatedImage", generated);
+            const prompt = actor.token?.getFlag?.("dnd-npc-randomizer", "generatedPrompt");
+            if (prompt) foundry.utils.setProperty(actorData, "flags.dnd-npc-randomizer.generatedPrompt", prompt);
+        }
+
+        // actor.img on a synthetic token actor already reflects delta.img, but
+        // pin it so the copy cannot regress to the prototype's portrait.
+        if (actor.img) actorData.img = actor.img;
     }
 
     // Always place the newly copied actor at the root level of the sidebar (no folder)
@@ -415,8 +633,19 @@ Hooks.on("getHeaderControlsApplicationV2", (app, controls) => {
         onClick: () => copyActorToSidebar(actor, app)
     });
 
+    // Manual generation, so art can be made (or remade) for any actor without
+    // waiting for a drop onto a scene.
+    controls.push({
+        icon: "fa-solid fa-wand-magic-sparkles",
+        label: "Generate Token Art",
+        action: "generateTokenArt",
+        visible: () => game.user.isGM && !!OpenAIImageGenerator.getApiKey(),
+        onClick: () => applyGeneratedImage({ actor: actor, token: actor.token ?? null })
+    });
+
     if (app.options?.actions) {
         app.options.actions.copyToActorSidebar = () => copyActorToSidebar(actor, app);
+        app.options.actions.generateTokenArt = () => applyGeneratedImage({ actor: actor, token: actor.token ?? null });
     }
 });
 
