@@ -1,3 +1,8 @@
+# 2.2.4
+
+* Strip Foundry enrichers from biographies before they reach the image prompt. `htmlToText` removed HTML tags but left markup like `@Embed[Compendium...]`, `@UUID[...]`, `&Reference[...]` and `[[/roll ...]]` as literal text - and the bundled compendium's biographies are full of them, so that noise was being sent to the image model. Human-readable `{labels}` are preserved; label-less references are dropped.
+* Reattached a JSDoc block that an earlier edit orphaned onto the wrong function.
+
 # 2.2.3
 
 * Repair now runs on **any** actor created in the world, via a `createActor` hook, not only those imported through this module's "Import NPCs" button. Dragging an NPC straight out of the compendium sidebar previously bypassed repair entirely and carried the dead image paths in verbatim.

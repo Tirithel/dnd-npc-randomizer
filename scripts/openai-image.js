@@ -50,7 +50,18 @@ export class OpenAIImageGenerator {
         if (!html) return "";
         const div = document.createElement("div");
         div.innerHTML = html;
-        const text = (div.textContent || div.innerText || "").replace(/\s+/g, " ").trim();
+        let text = div.textContent || div.innerText || "";
+
+        // Foundry enrichers are not HTML tags, so stripping markup leaves them
+        // behind as literal text. The bundled compendium's biographies are full
+        // of them, e.g. "@Embed[Compendium.dnd5e.content24.JournalEntry...]",
+        // which would otherwise be fed to the image model as prompt noise.
+        text = text
+            .replace(/[@&]\w+\[[^\]]*\]\{([^}]*)\}/g, "$1")  // keep the human-readable label
+            .replace(/[@&]\w+\[[^\]]*\]/g, "")                 // drop label-less references
+            .replace(/\[\[[^\]]*\]\]/g, "");                   // drop inline roll expressions
+
+        text = text.replace(/\s+/g, " ").trim();
         return text.length > maxLength ? `${text.slice(0, maxLength).trim()}...` : text;
     }
 
@@ -146,18 +157,6 @@ export class OpenAIImageGenerator {
     }
 
     /**
-     * Calls the OpenAI Images API.
-     *
-     * @param {Object} options - Request options.
-     * @param {string} options.prompt - The image prompt.
-     * @param {string} [options.apiKey] - Key override.
-     * @param {string} [options.model] - Image model id.
-     * @param {string} [options.size] - Pixel dimensions, e.g. "1024x1024".
-     * @param {string} [options.quality] - Model-specific quality tier.
-     * @returns {Promise<Uint8Array>} The raw PNG bytes.
-     * @throws {Error} When the key is missing or the API reports a failure.
-     */
-    /**
      * Coerces a size to one the given model actually accepts. The two model
      * families support different dimensions, and sending the wrong pair is a
      * hard 400 from the API.
@@ -204,6 +203,19 @@ export class OpenAIImageGenerator {
         return ["low", "medium", "high"].includes(quality) ? quality : null;
     }
 
+    /**
+     * Calls the OpenAI Images API.
+     *
+     * @param {Object} options - Request options.
+     * @param {string} options.prompt - The image prompt.
+     * @param {string} [options.apiKey] - Key override.
+     * @param {string} [options.model] - Image model id.
+     * @param {string} [options.size] - Pixel dimensions, e.g. "1024x1024".
+     * @param {string} [options.quality] - Model-specific quality tier.
+     * @param {boolean} [options._retried] - Internal: guards the dall-e-3 retry.
+     * @returns {Promise<Uint8Array>} The raw PNG bytes.
+     * @throws {Error} When the key is missing or the API reports a failure.
+     */
     static async requestImage({ prompt, apiKey, model, size, quality, _retried } = {}) {
         const key = this.getApiKey(apiKey);
         if (!key) throw new Error("No OpenAI API key configured. Set one in the module settings.");
